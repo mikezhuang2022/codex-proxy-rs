@@ -1287,6 +1287,71 @@ async fn calendar_query_rejects_an_anchor_outside_the_local_calendar() {
 }
 
 #[tokio::test]
+async fn usage_insights_maps_concurrency_summary_and_points_to_camel_case() {
+    use crate::admin::{AdminTestFixture, AdminTestState};
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use chrono::Duration;
+    use gateway_admin::model::observability::{
+        Granularity, RequestMetricPoint, TimeRange, UsageConcurrencyPoint, UsageOverview,
+    };
+    use gateway_api::admin::observability;
+    use tower::ServiceExt as _;
+
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = Utc::now();
+    let range = TimeRange::new(now - Duration::minutes(15), now).unwrap();
+    let bucket = range.start;
+    {
+        let mut observations = fixture.observations.lock().unwrap();
+        observations.summary = Some(UsageOverview {
+            analytics: Default::default(),
+            range,
+            requests: Default::default(),
+            attempts: Default::default(),
+            providers: Vec::new(),
+        });
+        observations.trend = Some(vec![RequestMetricPoint {
+            bucket_start: bucket,
+            granularity: Granularity::FifteenMinutes,
+            metrics: Default::default(),
+            cost_coverage: Default::default(),
+            costs: Vec::new(),
+        }]);
+        observations.concurrency = vec![UsageConcurrencyPoint {
+            bucket_start: bucket,
+            average_concurrency: 1.25,
+            peak_concurrency: 3,
+        }];
+    }
+
+    let response = observability::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/usage/insights/overview")
+                .header(header::COOKIE, "cpr_session=valid-session")
+                .header("x-request-id", "req_usage_insights_concurrency")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(status, StatusCode::OK, "{value}");
+    let performance = &value["data"]["performance"];
+    assert_eq!(performance["averageConcurrency"], json!(1.25));
+    assert_eq!(performance["peakConcurrency"], json!(3));
+    assert_eq!(performance["points"][0]["averageConcurrency"], json!(1.25));
+    assert_eq!(performance["points"][0]["peakConcurrency"], json!(3));
+}
+
+#[tokio::test]
 async fn observability_queries_reject_group_filters_and_analytics_search() {
     use crate::admin::{AdminTestFixture, AdminTestState};
     use axum::{

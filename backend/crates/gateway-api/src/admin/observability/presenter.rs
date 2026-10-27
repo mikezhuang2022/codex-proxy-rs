@@ -1117,6 +1117,8 @@ pub(crate) fn usage_insights_view(
             capacity_utilization_p95: point
                 .capacity_utilization_p95_basis_points
                 .map(basis_points_rate),
+            average_concurrency: point.average_concurrency,
+            peak_concurrency: point.peak_concurrency,
         })
         .collect();
     let cost_points = insights
@@ -1221,6 +1223,8 @@ pub(crate) fn usage_insights_view(
             admission_decision_coverage: insights.performance.admission_decision_coverage,
             account_selection_wait_coverage: insights.performance.account_selection_wait_coverage,
             capacity_coverage: insights.performance.capacity_coverage,
+            average_concurrency: insights.performance.average_concurrency,
+            peak_concurrency: insights.performance.peak_concurrency,
             points: performance_points,
         },
         cost: OverviewCostView {

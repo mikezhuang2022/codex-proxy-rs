@@ -22,8 +22,9 @@ use gateway_admin::{
             DiagnosticDimension, DiagnosticObservation, DiagnosticsObservation, Granularity,
             HealthStatus, LatencyPercentiles, ObservabilityPageSize, OpsErrorPage, OpsErrorQuery,
             PercentileMilliseconds, RequestMetricPoint, RequestMetrics, TimeRange, TrendKind,
-            UsageBilling, UsageDetail, UsageFilter, UsageInsightsObservation, UsageListRecord,
-            UsageOverview, UsagePage, UsageProjectedCostPoint, UsageQuery, UsageSummaryObservation,
+            UsageBilling, UsageConcurrencyPoint, UsageDetail, UsageFilter,
+            UsageInsightsObservation, UsageListRecord, UsageOverview, UsagePage,
+            UsageProjectedCostPoint, UsageQuery, UsageSummaryObservation,
         },
         settings::{
             AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
@@ -743,6 +744,46 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
 }
 
 #[tokio::test]
+async fn usage_insights_should_weight_concurrency_by_effective_bucket_duration() {
+    let end = Utc::now();
+    let range = TimeRange::new(end - Duration::minutes(30), end).unwrap();
+    let store = Arc::new(FixtureObservabilityStore::new(range));
+    store.replace_trend(vec![
+        health_metric_point(range.start, RequestMetrics::default()),
+        health_metric_point(
+            range.start + Duration::minutes(15),
+            RequestMetrics::default(),
+        ),
+    ]);
+    *store.concurrency.lock().unwrap() = vec![
+        UsageConcurrencyPoint {
+            bucket_start: range.start,
+            average_concurrency: 1.0,
+            peak_concurrency: 1,
+        },
+        UsageConcurrencyPoint {
+            bucket_start: range.start + Duration::minutes(15),
+            average_concurrency: 3.0,
+            peak_concurrency: 4,
+        },
+    ];
+
+    let insights = observability_services(store)
+        .await
+        .observability()
+        .usage_insights(range, UsageFilter::default())
+        .await
+        .unwrap();
+
+    assert_eq!(insights.performance.average_concurrency, 2.0);
+    assert_eq!(insights.performance.peak_concurrency, 4);
+    assert_eq!(insights.performance.points[0].average_concurrency, 1.0);
+    assert_eq!(insights.performance.points[0].peak_concurrency, 1);
+    assert_eq!(insights.performance.points[1].average_concurrency, 3.0);
+    assert_eq!(insights.performance.points[1].peak_concurrency, 4);
+}
+
+#[tokio::test]
 async fn diagnostics_should_preserve_request_order_when_a_small_sample_fails() {
     let now = Utc::now();
     let range = observation_range(now);
@@ -987,6 +1028,7 @@ struct FixtureObservabilityStore {
     trend: Mutex<Vec<RequestMetricPoint>>,
     overview: Mutex<UsageOverview>,
     projected_costs: Mutex<Vec<UsageProjectedCostPoint>>,
+    concurrency: Mutex<Vec<UsageConcurrencyPoint>>,
     insights_fail: AtomicBool,
     summary_fail: AtomicBool,
     diagnostics: Mutex<DiagnosticsObservation>,
@@ -1014,6 +1056,7 @@ impl FixtureObservabilityStore {
                 providers: Vec::new(),
             }),
             projected_costs: Mutex::new(Vec::new()),
+            concurrency: Mutex::new(Vec::new()),
             insights_fail: AtomicBool::new(false),
             summary_fail: AtomicBool::new(false),
             diagnostics: Mutex::new(DiagnosticsObservation::default()),
@@ -1144,6 +1187,7 @@ impl ObservabilityStore for FixtureObservabilityStore {
                 .lock()
                 .expect("projected costs")
                 .clone(),
+            concurrency: self.concurrency.lock().expect("concurrency").clone(),
         })
     }
 

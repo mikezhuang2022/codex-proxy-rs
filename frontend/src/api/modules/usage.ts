@@ -259,6 +259,8 @@ export interface UsageOverviewHealth {
 export interface UsageOverviewPerformancePoint {
   bucket: string
   label: string
+  averageConcurrency: number
+  peakConcurrency: number
   latencyP50Ms: number | null
   latencyP95Ms: number | null
   latencyP99Ms: number | null
@@ -277,6 +279,8 @@ export interface UsageOverviewPerformancePoint {
 }
 
 export interface UsageOverviewPerformance {
+  averageConcurrency: number
+  peakConcurrency: number
   latencyP50Ms: number | null
   latencyP95Ms: number | null
   latencyP99Ms: number | null

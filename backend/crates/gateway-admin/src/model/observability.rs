@@ -1260,8 +1260,16 @@ pub struct UsageInsightsHealth {
     pub points: Vec<UsageInsightsHealthPoint>,
 }
 
+/// 一个时间桶内按重叠时长加权的逻辑请求并发
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsageConcurrencyPoint {
+    pub bucket_start: DateTime<Utc>,
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
+}
+
 /// 洞察性能时间点
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UsageInsightsPerformancePoint {
     pub bucket_start: DateTime<Utc>,
     pub latency_percentiles: LatencyPercentiles,
@@ -1273,6 +1281,8 @@ pub struct UsageInsightsPerformancePoint {
     pub output_throughput_p90: Option<u64>,
     pub capacity_utilization_avg_basis_points: Option<u64>,
     pub capacity_utilization_p95_basis_points: Option<u64>,
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
 }
 
 /// 洞察性能汇总与可观测覆盖率
@@ -1292,6 +1302,8 @@ pub struct UsageInsightsPerformance {
     pub capacity_utilization_avg_basis_points: Option<u64>,
     pub capacity_utilization_p95_basis_points: Option<u64>,
     pub capacity_coverage: f64,
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
     pub points: Vec<UsageInsightsPerformancePoint>,
 }
 

@@ -1692,6 +1692,100 @@ async fn daily_rank_counts_follow_rebuilds_rollbacks_deletions_and_dirty_days() 
 }
 
 #[tokio::test]
+async fn insights_concurrency_counts_logical_request_overlap_once_per_bucket() {
+    let Some(database) = TestDatabase::create("analytics_concurrency").await else {
+        return;
+    };
+    let start = DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    for id in [
+        "concurrency_serial_a",
+        "concurrency_serial_b",
+        "concurrency_cross_bucket",
+        "concurrency_overlap",
+        "concurrency_running",
+        "concurrency_xai",
+    ] {
+        seed(&database.pool, id, start, &[]).await;
+    }
+    for (id, from, to) in [
+        ("concurrency_serial_a", 1, Some(4)),
+        ("concurrency_serial_b", 4, Some(6)),
+        ("concurrency_cross_bucket", 10, Some(25)),
+        ("concurrency_overlap", 12, Some(14)),
+        ("concurrency_running", 30, None),
+        ("concurrency_xai", 5, Some(20)),
+    ] {
+        sqlx::query("update model_requests set started_at=$2,completed_at=$3,recovery_lease_expires_at=$2+interval '1 hour',provider_kind=case when id='concurrency_xai' then 'xai' else 'openai' end,provider_account_ref='account_concurrency',upstream_transport='http_sse',upstream_send_state='sent',attempt_count=case when id='concurrency_serial_a' then 3 else 1 end,outcome=case when $3 is null then 'running' else 'succeeded' end where id=$1")
+            .bind(id)
+            .bind(start + TimeDelta::minutes(from))
+            .bind(to.map(|minute| start + TimeDelta::minutes(minute)))
+            .execute(&database.pool)
+            .await
+            .unwrap();
+    }
+    drain_analytics(&database.pool).await;
+    let repo = observability_repository(&database.pool);
+    let range = ObservabilityRange::new(start, start + TimeDelta::hours(1)).unwrap();
+    let insights = repo
+        .usage_insights_observation(
+            range,
+            UsageRecordFilter {
+                provider_kind: Some("openai".to_owned()),
+                ..Default::default()
+            },
+            gateway_admin::model::observability::Granularity::FifteenMinutes,
+        )
+        .await
+        .unwrap();
+    let actual = insights
+        .concurrency
+        .iter()
+        .map(|point| (point.average_concurrency, point.peak_concurrency))
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), 4);
+    assert!((actual[0].0 - 0.8).abs() < 1e-10);
+    assert_eq!(actual[0].1, 2);
+    assert!((actual[1].0 - 2.0 / 3.0).abs() < 1e-10);
+    assert_eq!(actual[1].1, 1);
+    assert_eq!(actual[2], (1.0, 1));
+    assert_eq!(actual[3], (1.0, 1));
+
+    let serial = repo
+        .usage_insights_observation(
+            ObservabilityRange::new(start, start + TimeDelta::minutes(10)).unwrap(),
+            UsageRecordFilter {
+                provider_kind: Some("openai".to_owned()),
+                ..Default::default()
+            },
+            gateway_admin::model::observability::Granularity::FifteenMinutes,
+        )
+        .await
+        .unwrap();
+    assert_eq!(serial.concurrency[0].average_concurrency, 0.5);
+    assert_eq!(serial.concurrency[0].peak_concurrency, 1);
+
+    let xai = repo
+        .usage_insights_observation(
+            range,
+            UsageRecordFilter {
+                provider_kind: Some("xai".to_owned()),
+                ..Default::default()
+            },
+            gateway_admin::model::observability::Granularity::FifteenMinutes,
+        )
+        .await
+        .unwrap();
+    assert!((xai.concurrency[0].average_concurrency - 2.0 / 3.0).abs() < 1e-10);
+    assert!((xai.concurrency[1].average_concurrency - 1.0 / 3.0).abs() < 1e-10);
+    assert_eq!(xai.concurrency[2].average_concurrency, 0.0);
+    assert_eq!(xai.concurrency[3].average_concurrency, 0.0);
+    assert_eq!(xai.concurrency[3].peak_concurrency, 0);
+    database.close().await;
+}
+
+#[tokio::test]
 async fn sql_edge_histograms_preserve_repeated_samples_and_power_of_two_boundaries() {
     let Some(database) = TestDatabase::create("analytics_sql_histogram_boundaries").await else {
         return;

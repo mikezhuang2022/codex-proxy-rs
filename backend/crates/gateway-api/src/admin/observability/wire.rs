@@ -669,6 +669,8 @@ pub struct OverviewPerformancePointView {
     pub output_throughput_p90: Option<u64>,
     pub capacity_utilization: Option<f64>,
     pub capacity_utilization_p95: Option<f64>,
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
 }
 
 /// 洞察性能摘要
@@ -695,6 +697,8 @@ pub struct OverviewPerformanceView {
     pub admission_decision_coverage: f64,
     pub account_selection_wait_coverage: f64,
     pub capacity_coverage: f64,
+    pub average_concurrency: f64,
+    pub peak_concurrency: u64,
     pub points: Vec<OverviewPerformancePointView>,
 }
 

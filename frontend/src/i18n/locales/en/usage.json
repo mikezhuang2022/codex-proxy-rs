@@ -61,6 +61,9 @@
     },
     "performance": {
       "ttftHelp": "TTFT: time to first token",
+      "concurrency": "Concurrency",
+      "averageConcurrency": "Average concurrency",
+      "peakConcurrency": "Peak concurrency",
       "scheduling": "Scheduling",
       "admissionP95": "Admission P95",
       "accountSelectionP95": "Selection P95",
@@ -69,7 +72,7 @@
       "accountSelectionCoverage": "Selection coverage",
       "capacityCoverage": "Capacity coverage",
       "title": "Performance",
-      "description": "Latency, throughput, scheduling",
+      "description": "Concurrency, latency, throughput, scheduling",
       "performanceIndicators": "Performance indicators",
       "loading": "Loading performance",
       "noTtftSamples": "No TTFT samples in this range",

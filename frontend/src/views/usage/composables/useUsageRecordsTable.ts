@@ -312,6 +312,8 @@ function emptyOverview() {
       points: [],
     },
     performance: {
+      averageConcurrency: 0,
+      peakConcurrency: 0,
       latencyP50Ms: null,
       latencyP95Ms: null,
       latencyP99Ms: null,

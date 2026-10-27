@@ -49,6 +49,10 @@ const requestActivity = computed(() => requestActivityByBucket(
 
 const viewOptions = computed(() => ([
   {
+    label: t('usage.performance.concurrency'),
+    value: 'concurrency',
+  },
+  {
     label: t('usage.latency.totalLatency'),
     value: 'total',
   },
@@ -67,6 +71,13 @@ const viewOptions = computed(() => ([
 ]))
 
 const seriesLabels = computed(() => {
+  if (activeView.value === 'concurrency') {
+    return [
+      t('usage.performance.averageConcurrency'),
+      t('usage.performance.peakConcurrency'),
+      '',
+    ] as const
+  }
   if (activeView.value === 'throughput')
     return ['P10', 'P50', 'P90'] as const
   if (activeView.value === 'scheduling') {
@@ -81,6 +92,14 @@ const seriesLabels = computed(() => {
 
 const selectedPoints = computed(() => {
   const points = performancePoints.value
+  if (activeView.value === 'concurrency') {
+    return points.map(point => ({
+      point,
+      first: point.averageConcurrency,
+      second: point.peakConcurrency,
+      third: null,
+    }))
+  }
   const active = requestActivity.value
   const firstValues = zeroInactiveValues(
     points.map(point => seriesValue(point, 'first')),
@@ -104,6 +123,18 @@ const selectedPoints = computed(() => {
 
 const summaryMetrics = computed(() => {
   const performance = props.performance
+  if (activeView.value === 'concurrency') {
+    return [
+      {
+        label: t('usage.performance.averageConcurrency'),
+        value: formatConcurrency(performance.averageConcurrency),
+      },
+      {
+        label: t('usage.performance.peakConcurrency'),
+        value: formatConcurrency(performance.peakConcurrency),
+      },
+    ]
+  }
   if (activeView.value === 'throughput') {
     return [
       {
@@ -181,18 +212,20 @@ const chartOption = computed<EChartsOption>(() => {
       points.map(point => point.second),
       theme.warning,
     ),
-    ...usageGapAwareLineSeries(
-      seriesLabels.value[2],
-      points.map(point => point.third),
-      activeView.value === 'scheduling'
-        ? theme.success
-        : theme.danger,
-      {
-        yAxisIndex: activeView.value === 'scheduling'
-          ? 1
-          : 0,
-      },
-    ),
+    ...(activeView.value === 'concurrency'
+      ? []
+      : usageGapAwareLineSeries(
+          seriesLabels.value[2],
+          points.map(point => point.third),
+          activeView.value === 'scheduling'
+            ? theme.success
+            : theme.danger,
+          {
+            yAxisIndex: activeView.value === 'scheduling'
+              ? 1
+              : 0,
+          },
+        )),
   ]
 
   return {
@@ -205,7 +238,7 @@ const chartOption = computed<EChartsOption>(() => {
       outerBoundsMode: 'same',
       outerBoundsContain: 'axisLabel',
     },
-    legend: usageLegend(theme, [...seriesLabels.value]),
+    legend: usageLegend(theme, seriesLabels.value.filter(Boolean)),
     tooltip: usageTooltip(theme, formatTooltip),
     xAxis: usageCategoryAxis(
       points.map(({ point }) => point.label),
@@ -222,15 +255,27 @@ const chartOption = computed<EChartsOption>(() => {
         ]
       : usageValueAxis(
           theme,
-          activeView.value === 'throughput'
-            ? value => `${formatCompactNumber(value)}/s`
-            : formatDurationAxis,
+          activeView.value === 'concurrency'
+            ? formatCompactNumber
+            : activeView.value === 'throughput'
+              ? value => `${formatCompactNumber(value)}/s`
+              : formatDurationAxis,
+          activeView.value === 'concurrency'
+            ? { min: 0 }
+            : {},
         ),
     series,
   }
 })
 
 function seriesValue(point: PerformancePoint, position: 'first' | 'second' | 'third') {
+  if (activeView.value === 'concurrency') {
+    if (position === 'first')
+      return point.averageConcurrency
+    if (position === 'second')
+      return point.peakConcurrency
+    return null
+  }
   if (activeView.value === 'throughput') {
     if (position === 'first')
       return point.outputThroughputP10
@@ -274,22 +319,34 @@ function formatTooltip(params: unknown) {
       formatSeriesValue(selected.second, 'second'),
       theme.warning,
     ),
-    usageTooltipItem(
-      seriesLabels.value[2],
-      formatSeriesValue(selected.third, 'third'),
-      activeView.value === 'scheduling'
-        ? theme.success
-        : theme.danger,
-    ),
+    ...(activeView.value === 'concurrency'
+      ? []
+      : [
+          usageTooltipItem(
+            seriesLabels.value[2],
+            formatSeriesValue(selected.third, 'third'),
+            activeView.value === 'scheduling'
+              ? theme.success
+              : theme.danger,
+          ),
+        ]),
   ])
 }
 
 function formatSeriesValue(value: number | null, position: 'first' | 'second' | 'third') {
+  if (activeView.value === 'concurrency')
+    return formatConcurrency(value)
   if (activeView.value === 'throughput')
     return formatThroughput(value)
   if (activeView.value === 'scheduling' && position === 'third')
     return formatPercent(value)
   return formatDuration(value)
+}
+
+function formatConcurrency(value: number | null) {
+  return value == null
+    ? '—'
+    : formatCompactNumber(value)
 }
 
 function formatThroughput(value: number | null) {
