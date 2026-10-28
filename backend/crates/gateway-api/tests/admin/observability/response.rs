@@ -1287,7 +1287,7 @@ async fn calendar_query_rejects_an_anchor_outside_the_local_calendar() {
 }
 
 #[tokio::test]
-async fn usage_insights_maps_concurrency_summary_and_points_to_camel_case() {
+async fn usage_insights_maps_load_summary_and_points_to_camel_case() {
     use crate::admin::{AdminTestFixture, AdminTestState};
     use axum::{
         body::{Body, to_bytes},
@@ -1295,7 +1295,8 @@ async fn usage_insights_maps_concurrency_summary_and_points_to_camel_case() {
     };
     use chrono::Duration;
     use gateway_admin::model::observability::{
-        Granularity, RequestMetricPoint, TimeRange, UsageConcurrencyPoint, UsageOverview,
+        Granularity, LatencyPercentiles, PercentileMilliseconds, RequestMetricPoint,
+        RequestMetrics, TimeRange, UsageConcurrencyPoint, UsageOverview,
     };
     use gateway_api::admin::observability;
     use tower::ServiceExt as _;
@@ -1310,14 +1311,30 @@ async fn usage_insights_maps_concurrency_summary_and_points_to_camel_case() {
         observations.summary = Some(UsageOverview {
             analytics: Default::default(),
             range,
-            requests: Default::default(),
+            requests: RequestMetrics {
+                admission_decision_percentiles: LatencyPercentiles {
+                    p95_ms: Some(PercentileMilliseconds::new(12.5).unwrap()),
+                    ..Default::default()
+                },
+                account_selection_wait_percentiles: LatencyPercentiles {
+                    p95_ms: Some(PercentileMilliseconds::new(128.75).unwrap()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             attempts: Default::default(),
             providers: Vec::new(),
         });
         observations.trend = Some(vec![RequestMetricPoint {
             bucket_start: bucket,
             granularity: Granularity::FifteenMinutes,
-            metrics: Default::default(),
+            metrics: RequestMetrics {
+                admission_decision_percentiles: LatencyPercentiles {
+                    p95_ms: Some(PercentileMilliseconds::new(2.5).unwrap()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             cost_coverage: Default::default(),
             costs: Vec::new(),
         }]);
@@ -1334,7 +1351,7 @@ async fn usage_insights_maps_concurrency_summary_and_points_to_camel_case() {
             Request::builder()
                 .uri("/api/admin/usage/insights/overview")
                 .header(header::COOKIE, "cpr_session=valid-session")
-                .header("x-request-id", "req_usage_insights_concurrency")
+                .header("x-request-id", "req_usage_insights_load")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -1345,10 +1362,24 @@ async fn usage_insights_maps_concurrency_summary_and_points_to_camel_case() {
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(status, StatusCode::OK, "{value}");
     let performance = &value["data"]["performance"];
-    assert_eq!(performance["averageConcurrency"], json!(1.25));
-    assert_eq!(performance["peakConcurrency"], json!(3));
-    assert_eq!(performance["points"][0]["averageConcurrency"], json!(1.25));
-    assert_eq!(performance["points"][0]["peakConcurrency"], json!(3));
+    assert_eq!(
+        performance["load"],
+        json!({
+            "averageConcurrency": 1.25,
+            "peakConcurrency": 3,
+            "admissionDecisionP95Ms": 12.5,
+            "accountSelectionWaitP95Ms": 128.75,
+        })
+    );
+    assert_eq!(
+        performance["points"][0]["load"],
+        json!({
+            "averageConcurrency": 1.25,
+            "peakConcurrency": 3,
+            "admissionDecisionP95Ms": 2.5,
+            "accountSelectionWaitP95Ms": null,
+        })
+    );
 }
 
 #[tokio::test]

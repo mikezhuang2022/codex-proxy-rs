@@ -395,6 +395,7 @@ impl<'a> AnalyticsSnapshot<'a> {
             }
             boundaries
         };
+        // 按生命周期分开筛选，使终态请求复用 completed_at 索引，运行中请求沿用独立索引
         let mut query = QueryBuilder::<Postgres>::new(
             "with buckets as materialized (select greatest(bucket_start,",
         );
@@ -406,18 +407,43 @@ impl<'a> AnalyticsSnapshot<'a> {
             .push_bind(range.end)
             .push("::timestamptz) as bucket_end,bucket_start from unnest(")
             .push_bind(boundaries)
-            .push("::timestamptz[]) input(bucket_start)), matching as materialized (select mr.started_at,least(coalesce(mr.completed_at,")
-            .push_bind(range.end)
-            .push("::timestamptz),")
-            .push_bind(range.end)
-            .push("::timestamptz) as completed_at from model_request_observations mr where mr.started_at < ")
-            .push_bind(range.end)
-            .push(" and coalesce(mr.completed_at,")
-            .push_bind(range.end)
-            .push("::timestamptz) > ")
-            .push_bind(range.start);
+            .push("::timestamptz[]) input(bucket_start)), matching as (select mr.started_at,mr.completed_at from model_request_observations mr where mr.outcome <> 'running' and mr.completed_at > ")
+            .push_bind(range.start)
+            .push(" and mr.started_at < ")
+            .push_bind(range.end);
         push_analytics_filter(&mut query, filter, "mr");
-        query.push("), events as (select b.bucket_start,greatest(m.started_at,b.effective_start) as occurred_at,1::bigint as delta from buckets b join matching m on m.started_at < b.bucket_end and m.completed_at > b.effective_start union all select b.bucket_start,least(m.completed_at,b.bucket_end),-1::bigint from buckets b join matching m on m.started_at < b.bucket_end and m.completed_at > b.effective_start), event_points as (select bucket_start,occurred_at,sum(delta)::bigint as delta from events group by bucket_start,occurred_at), timeline as (select bucket_start,occurred_at,sum(delta) over(partition by bucket_start order by occurred_at rows between unbounded preceding and current row)::bigint as concurrency,lead(occurred_at) over(partition by bucket_start order by occurred_at) as next_occurred_at from event_points) select b.bucket_start,coalesce(sum(t.concurrency*extract(epoch from t.next_occurred_at-t.occurred_at))/nullif(extract(epoch from b.bucket_end-b.effective_start),0),0)::float8 as average_concurrency,coalesce(max(t.concurrency),0)::bigint as peak_concurrency from buckets b left join timeline t on t.bucket_start=b.bucket_start group by b.bucket_start,b.effective_start,b.bucket_end order by b.bucket_start");
+        query
+            .push(" union all select mr.started_at,")
+            .push_bind(range.end)
+            .push("::timestamptz as completed_at from model_request_observations mr where mr.outcome = 'running' and mr.started_at < ")
+            .push_bind(range.end);
+        push_analytics_filter(&mut query, filter, "mr");
+        // 每个请求只产生两个事件，桶边界只切分时间轴，避免请求与所有桶逐一连接
+        // 同时刻先合并增减，再计算下一段并发，遵循左闭右开的执行区间
+        query
+            .push("), events as (select e.occurred_at,e.delta,null::timestamptz as bucket_start from matching m cross join lateral (values (greatest(m.started_at,")
+            .push_bind(range.start)
+            .push("::timestamptz),1::bigint),(least(m.completed_at,")
+            .push_bind(range.end)
+            .push("::timestamptz),-1::bigint)) e(occurred_at,delta) union all select effective_start,0::bigint,bucket_start from buckets union all select ")
+            .push_bind(range.end)
+            .push("::timestamptz,0::bigint,null::timestamptz),
+                event_points as (
+                    select occurred_at,sum(delta)::bigint as delta,max(bucket_start) as bucket_start
+                    from events group by occurred_at
+                ), timeline as (
+                    select occurred_at,sum(delta) over timeline_order::bigint as concurrency,
+                        max(bucket_start) over timeline_order as bucket_start,
+                        lead(occurred_at) over(order by occurred_at) as next_occurred_at
+                    from event_points
+                    window timeline_order as (order by occurred_at rows between unbounded preceding and current row)
+                )
+                select b.bucket_start,
+                    coalesce(sum(t.concurrency*extract(epoch from t.next_occurred_at-t.occurred_at))
+                        /nullif(extract(epoch from b.bucket_end-b.effective_start),0),0)::float8 as average_concurrency,
+                    coalesce(max(t.concurrency),0)::bigint as peak_concurrency
+                from buckets b left join timeline t on t.bucket_start=b.bucket_start and t.next_occurred_at>t.occurred_at
+                group by b.bucket_start,b.effective_start,b.bucket_end order by b.bucket_start");
         let rows = query
             .build()
             .fetch_all(&mut *self.tx)

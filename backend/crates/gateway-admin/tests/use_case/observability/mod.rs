@@ -679,10 +679,26 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
     assert_eq!(insights.health.success_rate, 0.75);
     assert_eq!(insights.health.completion_rate, 1.0);
     assert_eq!(insights.granularity, Granularity::FifteenMinutes);
-    assert_eq!(insights.performance.latency_coverage, 0.5);
-    assert_eq!(insights.performance.admission_decision_coverage, 1.0);
-    assert_eq!(insights.performance.account_selection_wait_coverage, 0.8);
-    assert_eq!(insights.performance.capacity_coverage, 0.8);
+    assert_eq!(
+        insights
+            .performance
+            .load
+            .admission_decision_p95_ms
+            .map(|value| value.as_f64()),
+        Some(5.0)
+    );
+    assert_eq!(
+        insights
+            .performance
+            .load
+            .account_selection_wait_p95_ms
+            .map(|value| value.as_f64()),
+        Some(40.0)
+    );
+    assert_eq!(
+        insights.performance.points[0].load,
+        insights.performance.load
+    );
     assert_eq!(insights.performance.output_throughput_p50, Some(50));
     assert_eq!(insights.cost.tokens_per_request, 100.0);
     assert_eq!(
@@ -745,24 +761,30 @@ async fn observability_services_should_calculate_usage_insights_and_diagnostic_s
 
 #[tokio::test]
 async fn usage_insights_should_weight_concurrency_by_effective_bucket_duration() {
-    let end = Utc::now();
-    let range = TimeRange::new(end - Duration::minutes(30), end).unwrap();
+    let bucket_start = DateTime::parse_from_rfc3339("2026-09-01T10:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let range = TimeRange::new(
+        bucket_start + Duration::minutes(5),
+        bucket_start + Duration::minutes(20),
+    )
+    .unwrap();
     let store = Arc::new(FixtureObservabilityStore::new(range));
     store.replace_trend(vec![
-        health_metric_point(range.start, RequestMetrics::default()),
+        health_metric_point(bucket_start, RequestMetrics::default()),
         health_metric_point(
-            range.start + Duration::minutes(15),
+            bucket_start + Duration::minutes(15),
             RequestMetrics::default(),
         ),
     ]);
     *store.concurrency.lock().unwrap() = vec![
         UsageConcurrencyPoint {
-            bucket_start: range.start,
+            bucket_start,
             average_concurrency: 1.0,
             peak_concurrency: 1,
         },
         UsageConcurrencyPoint {
-            bucket_start: range.start + Duration::minutes(15),
+            bucket_start: bucket_start + Duration::minutes(15),
             average_concurrency: 3.0,
             peak_concurrency: 4,
         },
@@ -775,12 +797,12 @@ async fn usage_insights_should_weight_concurrency_by_effective_bucket_duration()
         .await
         .unwrap();
 
-    assert_eq!(insights.performance.average_concurrency, 2.0);
-    assert_eq!(insights.performance.peak_concurrency, 4);
-    assert_eq!(insights.performance.points[0].average_concurrency, 1.0);
-    assert_eq!(insights.performance.points[0].peak_concurrency, 1);
-    assert_eq!(insights.performance.points[1].average_concurrency, 3.0);
-    assert_eq!(insights.performance.points[1].peak_concurrency, 4);
+    assert!((insights.performance.load.average_concurrency - 5.0 / 3.0).abs() < 1e-10);
+    assert_eq!(insights.performance.load.peak_concurrency, 4);
+    assert_eq!(insights.performance.points[0].load.average_concurrency, 1.0);
+    assert_eq!(insights.performance.points[0].load.peak_concurrency, 1);
+    assert_eq!(insights.performance.points[1].load.average_concurrency, 3.0);
+    assert_eq!(insights.performance.points[1].load.peak_concurrency, 4);
 }
 
 #[tokio::test]

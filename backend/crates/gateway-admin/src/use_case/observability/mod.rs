@@ -22,8 +22,8 @@ use crate::{
             TrendSummary, UsageBilling, UsageBillingProjection, UsageCalculatedBillingFact,
             UsageConcurrencyPoint, UsageDetail, UsageFilter, UsageInsights, UsageInsightsCost,
             UsageInsightsCostPoint, UsageInsightsHealth, UsageInsightsHealthPoint,
-            UsageInsightsPerformance, UsageInsightsPerformancePoint, UsageOverview, UsagePage,
-            UsageQuery, UsageSummary,
+            UsageInsightsLoad, UsageInsightsPerformance, UsageInsightsPerformancePoint,
+            UsageOverview, UsagePage, UsageQuery, UsageSummary,
         },
         provider_credentials::ProviderQuotaRequest,
     },
@@ -463,29 +463,15 @@ fn build_usage_insights(
     let performance = UsageInsightsPerformance {
         latency_percentiles: requests.latency_percentiles,
         first_token_latency_percentiles: requests.first_token_latency_percentiles,
-        latency_coverage: rate_or_zero(requests.latency_count, requests.request_count),
-        first_token_coverage: rate_or_zero(
-            requests.first_token_latency_count,
-            requests.request_count,
-        ),
-        admission_decision_percentiles: requests.admission_decision_percentiles,
-        account_selection_wait_percentiles: requests.account_selection_wait_percentiles,
-        admission_decision_coverage: rate_or_zero(
-            requests.admission_decision_count,
-            requests.request_count,
-        ),
-        account_selection_wait_coverage: rate_or_zero(
-            requests.account_selection_wait_count,
-            requests.request_count,
-        ),
         output_throughput_p10: requests.output_throughput_p10,
         output_throughput_p50: requests.output_throughput_p50,
         output_throughput_p90: requests.output_throughput_p90,
-        capacity_utilization_avg_basis_points: requests.capacity_utilization_avg_basis_points,
-        capacity_utilization_p95_basis_points: requests.capacity_utilization_p95_basis_points,
-        capacity_coverage: rate_or_zero(requests.capacity_sample_count, requests.request_count),
-        average_concurrency,
-        peak_concurrency,
+        load: UsageInsightsLoad {
+            average_concurrency,
+            peak_concurrency,
+            admission_decision_p95_ms: requests.admission_decision_percentiles.p95_ms,
+            account_selection_wait_p95_ms: requests.account_selection_wait_percentiles.p95_ms,
+        },
         points: trend
             .iter()
             .map(|point| {
@@ -494,21 +480,22 @@ fn build_usage_insights(
                     bucket_start: point.bucket_start,
                     latency_percentiles: point.metrics.latency_percentiles,
                     first_token_latency_percentiles: point.metrics.first_token_latency_percentiles,
-                    admission_decision_percentiles: point.metrics.admission_decision_percentiles,
-                    account_selection_wait_percentiles: point
-                        .metrics
-                        .account_selection_wait_percentiles,
                     output_throughput_p10: point.metrics.output_throughput_p10,
                     output_throughput_p50: point.metrics.output_throughput_p50,
                     output_throughput_p90: point.metrics.output_throughput_p90,
-                    capacity_utilization_avg_basis_points: point
-                        .metrics
-                        .capacity_utilization_avg_basis_points,
-                    capacity_utilization_p95_basis_points: point
-                        .metrics
-                        .capacity_utilization_p95_basis_points,
-                    average_concurrency: concurrency.map_or(0.0, |point| point.average_concurrency),
-                    peak_concurrency: concurrency.map_or(0, |point| point.peak_concurrency),
+                    load: UsageInsightsLoad {
+                        average_concurrency: concurrency
+                            .map_or(0.0, |point| point.average_concurrency),
+                        peak_concurrency: concurrency.map_or(0, |point| point.peak_concurrency),
+                        admission_decision_p95_ms: point
+                            .metrics
+                            .admission_decision_percentiles
+                            .p95_ms,
+                        account_selection_wait_p95_ms: point
+                            .metrics
+                            .account_selection_wait_percentiles
+                            .p95_ms,
+                    },
                 }
             })
             .collect(),
